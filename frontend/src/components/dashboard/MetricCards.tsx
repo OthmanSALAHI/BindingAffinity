@@ -6,9 +6,11 @@ interface MetricCardsProps {
   kibaScore: number;
   confidence: number;
   isLoading: boolean;
+  modelUsed?: string;
+  predictionTime?: number;
 }
 
-export function MetricCards({ kibaScore, confidence, isLoading }: MetricCardsProps) {
+export function MetricCards({ kibaScore, confidence, isLoading, modelUsed = "KIBA", predictionTime = 0.847 }: MetricCardsProps) {
   const confidenceData = [
     { x: 0, y: 20 },
     { x: 1, y: 35 },
@@ -134,16 +136,16 @@ export function MetricCards({ kibaScore, confidence, isLoading }: MetricCardsPro
         <h3 className="text-sm font-medium text-foreground mb-3">Analysis Summary</h3>
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Model Version</span>
-            <span className="text-foreground">BioAffinity v2.4</span>
+            <span className="text-muted-foreground">Model Used</span>
+            <span className="text-foreground">{modelUsed}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Inference Time</span>
-            <span className="text-foreground">0.847s</span>
+            <span className="text-foreground">{predictionTime.toFixed(3)}s</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">GPU Accelerated</span>
-            <span className="text-primary">Yes ✓</span>
+            <span className="text-muted-foreground">API Source</span>
+            <span className="text-primary">HuggingFace ✓</span>
           </div>
         </div>
       </GlassCard>

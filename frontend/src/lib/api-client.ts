@@ -1,4 +1,5 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const BINDING_AFFINITY_API = 'https://abdoir-drug-target-binding-affinity.hf.space';
 
 // API Client
 class ApiClient {
@@ -74,6 +75,42 @@ class ApiClient {
         throw error;
       }
       throw new Error('Upload error');
+    }
+  }
+
+  // Binding Affinity Prediction
+  async predictBindingAffinity(smiles: string, proteinSequence: string): Promise<{
+    smiles: string;
+    protein_sequence: string;
+    binding_affinity: number;
+    model_used: string;
+  }> {
+    const url = `${BINDING_AFFINITY_API}/predict`;
+    
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          smiles,
+          protein_sequence: proteinSequence,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || errorData.message || 'Prediction failed');
+      }
+
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error('Failed to connect to prediction service');
     }
   }
 }

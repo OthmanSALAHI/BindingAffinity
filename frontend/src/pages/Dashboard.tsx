@@ -8,27 +8,50 @@ import { MetricCards } from "@/components/dashboard/MetricCards";
 import { UserProfile } from "@/components/dashboard/UserProfile";
 import { UserMenu } from "@/components/dashboard/UserMenu";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { apiClient } from "@/lib/api-client";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Dashboard() {
   const [kibaScore, setKibaScore] = useState(14.2);
   const [confidence, setConfidence] = useState(87);
   const [isLoading, setIsLoading] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [modelUsed, setModelUsed] = useState("KIBA");
+  const [predictionTime, setPredictionTime] = useState(0.847);
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   const handlePredict = async (smiles: string, protein: string) => {
     setIsLoading(true);
+    const startTime = Date.now();
     
-    // Simulate AI prediction
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // Generate random prediction values for demo
-    const newScore = Math.random() * 15 + 5;
-    const newConfidence = Math.floor(Math.random() * 20 + 75);
-    
-    setKibaScore(newScore);
-    setConfidence(newConfidence);
-    setIsLoading(false);
+    try {
+      const result = await apiClient.predictBindingAffinity(smiles, protein);
+      const endTime = Date.now();
+      
+      setKibaScore(result.binding_affinity);
+      setModelUsed(result.model_used);
+      setPredictionTime((endTime - startTime) / 1000);
+      
+      // Calculate confidence based on binding affinity score
+      // Higher affinity scores generally indicate more confident predictions
+      const calculatedConfidence = Math.min(95, Math.max(70, 75 + (result.binding_affinity / 20) * 20));
+      setConfidence(Math.floor(calculatedConfidence));
+      
+      toast({
+        title: "Prediction Complete",
+        description: `Binding affinity: ${result.binding_affinity.toFixed(2)} (${result.model_used} model)`,
+      });
+    } catch (error) {
+      toast({
+        title: "Prediction Failed",
+        description: error instanceof Error ? error.message : "Failed to predict binding affinity",
+        variant: "destructive",
+      });
+      console.error("Prediction error:", error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleLogout = () => {
@@ -52,7 +75,6 @@ export default function Dashboard() {
           <div className="px-6 py-4 border-b border-border/50 bg-card/50 backdrop-blur-xl relative">
             <UserMenu 
               onOpenProfile={() => setIsProfileOpen(true)}
-              onLogout={handleLogout}
             />
           </div>
         </div>
@@ -99,6 +121,8 @@ export default function Dashboard() {
                 kibaScore={kibaScore}
                 confidence={confidence}
                 isLoading={isLoading}
+                modelUsed={modelUsed}
+                predictionTime={predictionTime}
               />
             </motion.div>
           </div>
