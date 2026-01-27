@@ -1,0 +1,46 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "index.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/auth/register",
+      "dest": "index.js"
+    },
+    {
+      "src": "/api/auth/login",
+      "dest": "index.js"
+    },
+    {
+      "src": "/api/auth/profile",
+      "dest": "index.js"
+    },
+    {
+      "src": "/api/database/(.*)",
+      "dest": "index.js"
+    },
+    {
+      "src": "/api/predict",
+      "dest": "index.js"
+    },
+    {
+      "src": "/api/health",
+      "dest": "index.js"
+    },
+    {
+      "src": "/uploads/(.*)",
+      "dest": "index.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "index.js"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
+}
