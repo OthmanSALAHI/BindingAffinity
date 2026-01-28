@@ -5,9 +5,7 @@ const path = require('path');
 const { initDatabase } = require('./config/database');
 const authRoutes = require('./routes/auth');
 const databaseRoutes = require('./routes/database');
-// Add node-fetch if you haven't (npm install node-fetch) 
-// or use standard fetch if on Node 18+
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+const fetch = require('node-fetch');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -19,6 +17,30 @@ app.use(express.urlencoded({ extended: true }));
 
 // Static file serving
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Initialize database once (for serverless, this runs on cold start)
+let dbInitialized = false;
+const ensureDatabase = async (req, res, next) => {
+  if (!dbInitialized) {
+    try {
+      await initDatabase();
+      dbInitialized = true;
+      console.log('Database initialized successfully');
+    } catch (error) {
+      console.error('Failed to initialize database:', error);
+      return res.status(500).json({ error: 'Database initialization failed' });
+    }
+  }
+  next();
+};
+
+// Apply database middleware to all routes except health check
+app.use((req, res, next) => {
+  if (req.path === '/api/health') {
+    return next();
+  }
+  return ensureDatabase(req, res, next);
+});
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -59,22 +81,25 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Server is running' });
 });
 
-// Initialize database and start server
-const startServer = async () => {
-  try {
-    await initDatabase();
-    console.log('Database initialized successfully');
-    
-    app.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
-    });
-  } catch (error) {
-    console.error('Failed to initialize database:', error);
-    process.exit(1);
-  }
-};
-
-startServer();
+// For local development only
+if (process.env.NODE_ENV !== 'production') {
+  const startServer = async () => {
+    try {
+      await initDatabase();
+      dbInitialized = true;
+      console.log('Database initialized successfully');
+      
+      app.listen(PORT, () => {
+        console.log(`Server is running on port ${PORT}`);
+      });
+    } catch (error) {
+      console.error('Failed to initialize database:', error);
+      process.exit(1);
+    }
+  };
+  
+  startServer();
+}
 
 // Export for Vercel
 module.exports = app;
