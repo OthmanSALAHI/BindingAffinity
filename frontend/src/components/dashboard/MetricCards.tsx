@@ -10,7 +10,13 @@ interface MetricCardsProps {
   predictionTime?: number;
 }
 
-export function MetricCards({ kibaScore, confidence, isLoading, modelUsed = "KIBA", predictionTime = 0.847 }: MetricCardsProps) {
+export function MetricCards({
+  kibaScore,
+  confidence,
+  isLoading,
+  modelUsed = "KIBA",
+  predictionTime = 0.847,
+}: MetricCardsProps) {
   const confidenceData = [
     { x: 0, y: 20 },
     { x: 1, y: 35 },
@@ -20,8 +26,16 @@ export function MetricCards({ kibaScore, confidence, isLoading, modelUsed = "KIB
     { x: 5, y: confidence },
   ];
 
-  const bindingStrength = kibaScore < 5 ? "Weak" : kibaScore < 10 ? "Moderate" : kibaScore < 15 ? "Strong" : "Very Strong";
-  const strengthColor = kibaScore < 5 ? "text-yellow-400" : kibaScore < 10 ? "text-blue-400" : "text-primary";
+  // Updated binding strength logic per user request
+  let bindingStrength = "Weak / Inactive";
+  let strengthColor = "text-yellow-400";
+  if (kibaScore > 12.0) {
+    bindingStrength = "Strong";
+    strengthColor = "text-green-500";
+  } else if (kibaScore >= 11.0 && kibaScore <= 12.0) {
+    bindingStrength = "Moderate";
+    strengthColor = "text-blue-400";
+  }
 
   return (
     <div className="space-y-4 h-full">
@@ -50,9 +64,20 @@ export function MetricCards({ kibaScore, confidence, isLoading, modelUsed = "KIB
             >
               <span className="metric-value text-6xl">{kibaScore.toFixed(1)}</span>
               <div className="mt-2">
-                <span className={`text-sm font-medium ${strengthColor}`}>
-                  {bindingStrength} Binding
-                </span>
+                <span className={`text-sm font-medium ${strengthColor}`}>{bindingStrength} Binding</span>
+              </div>
+              {/* Binding Strength Legend */}
+              <div className="mt-4 text-xs text-muted-foreground text-left mx-auto max-w-xs">
+                <div className="font-semibold mb-1">Binding Strength Legend:</div>
+                <div>
+                  &gt; 12.0 &nbsp; <span className="text-green-500 font-medium">Strong Binding</span>
+                </div>
+                <div>
+                  11.0 - 12.0 &nbsp; <span className="text-blue-400 font-medium">Moderate</span>
+                </div>
+                <div>
+                  &lt; 11.0 &nbsp; <span className="text-yellow-400 font-medium">Weak / Inactive</span>
+                </div>
               </div>
             </motion.div>
           )}
@@ -116,7 +141,7 @@ export function MetricCards({ kibaScore, confidence, isLoading, modelUsed = "KIB
             <span className="text-xs text-muted-foreground">IC50 (nM)</span>
           </div>
           <p className="text-xl font-semibold text-foreground">
-            {isLoading ? "—" : (Math.pow(10, kibaScore / 3)).toFixed(2)}
+            {isLoading ? "—" : Math.pow(10, kibaScore / 3).toFixed(2)}
           </p>
         </GlassCard>
 
