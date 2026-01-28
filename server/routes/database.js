@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../config/database');
+const { sql } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 
 // Secret key middleware - add an extra layer of security
@@ -14,17 +14,21 @@ const secretKey = (req, res, next) => {
 
 // Admin check middleware
 const isAdmin = (req, res, next) => {
-  if (!req.user || !req.user.is_admin) {
+  if (!req.user || !req.user.isAdmin) {
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();
 };
 
 // Get all tables
-router.get('/tables', authenticateToken, isAdmin, secretKey, (req, res) => {
+router.get('/tables', authenticateToken, isAdmin, secretKey, async (req, res) => {
   try {
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
-    res.json({ tables });
+    const result = await sql`
+      SELECT tablename as name 
+      FROM pg_catalog.pg_tables 
+      WHERE schemaname != 'pg_catalog' AND schemaname != 'information_schema'
+    `;
+    res.json({ tables: result.rows });
   } catch (error) {
     console.error('Error fetching tables:', error);
     res.status(500).json({ error: error.message });
@@ -32,11 +36,16 @@ router.get('/tables', authenticateToken, isAdmin, secretKey, (req, res) => {
 });
 
 // Get table schema
-router.get('/tables/:tableName/schema', authenticateToken, isAdmin, secretKey, (req, res) => {
+router.get('/tables/:tableName/schema', authenticateToken, isAdmin, secretKey, async (req, res) => {
   try {
     const { tableName } = req.params;
-    const schema = db.prepare(`PRAGMA table_info(${tableName})`).all();
-    res.json({ schema });
+    const result = await sql`
+      SELECT column_name, data_type, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_name = ${tableName}
+      ORDER BY ordinal_position
+    `;
+    res.json({ schema: result.rows });
   } catch (error) {
     console.error('Error fetching schema:', error);
     res.status(500).json({ error: error.message });
@@ -44,15 +53,17 @@ router.get('/tables/:tableName/schema', authenticateToken, isAdmin, secretKey, (
 });
 
 // Get all rows from a table
-router.get('/tables/:tableName/rows', authenticateToken, isAdmin, secretKey, (req, res) => {
+router.get('/tables/:tableName/rows', authenticateToken, isAdmin, secretKey, async (req, res) => {
   try {
     const { tableName } = req.params;
     const { limit = 100, offset = 0 } = req.query;
     
-    const rows = db.prepare(`SELECT * FROM ${tableName} LIMIT ? OFFSET ?`).all(limit, offset);
-    const count = db.prepare(`SELECT COUNT(*) as total FROM ${tableName}`).get();
+    // Note: Direct table name interpolation is risky but needed here
+    // In production, validate tableName against whitelist
+    const rows = await sql.query(`SELECT * FROM ${tableName} LIMIT $1 OFFSET $2`, [limit, offset]);
+    const count = await sql.query(`SELECT COUNT(*) as total FROM ${tableName}`);
     
-    res.json({ rows, total: count.total });
+    res.json({ rows: rows.rows, total: parseInt(count.rows[0].total) });
   } catch (error) {
     console.error('Error fetching rows:', error);
     res.status(500).json({ error: error.message });
@@ -60,7 +71,7 @@ router.get('/tables/:tableName/rows', authenticateToken, isAdmin, secretKey, (re
 });
 
 // Execute custom query (SELECT only for safety)
-router.post('/query', authenticateToken, isAdmin, secretKey, (req, res) => {
+router.post('/query', authenticateToken, isAdmin, secretKey, async (req, res) => {
   try {
     const { query } = req.body;
     
@@ -74,8 +85,8 @@ router.post('/query', authenticateToken, isAdmin, secretKey, (req, res) => {
       return res.status(400).json({ error: 'Only SELECT queries are allowed in this endpoint. Use specific endpoints for modifications.' });
     }
     
-    const result = db.prepare(query).all();
-    res.json({ result });
+    const result = await sql.query(query);
+    res.json({ result: result.rows });
   } catch (error) {
     console.error('Error executing query:', error);
     res.status(500).json({ error: error.message });
@@ -83,7 +94,7 @@ router.post('/query', authenticateToken, isAdmin, secretKey, (req, res) => {
 });
 
 // Insert row
-router.post('/tables/:tableName/rows', authenticateToken, isAdmin, secretKey, (req, res) => {
+router.post('/tables/:tableName/rows', authenticateToken, isAdmin, secretKey, async (req, res) => {
   try {
     const { tableName } = req.params;
     const { data } = req.body;
@@ -93,13 +104,13 @@ router.post('/tables/:tableName/rows', authenticateToken, isAdmin, secretKey, (r
     }
     
     const columns = Object.keys(data).join(', ');
-    const placeholders = Object.keys(data).map(() => '?').join(', ');
+    const placeholders = Object.keys(data).map((_, i) => `$${i + 1}`).join(', ');
     const values = Object.values(data);
     
-    const stmt = db.prepare(`INSERT INTO ${tableName} (${columns}) VALUES (${placeholders})`);
-    const result = stmt.run(...values);
+    const query = `INSERT INTO ${tableName} (${columns}) VALUES (${placeholders}) RETURNING *`;
+    const result = await sql.query(query, values);
     
-    res.json({ success: true, id: result.lastInsertRowid, changes: result.changes });
+    res.json({ success: true, row: result.rows[0], changes: result.rowCount });
   } catch (error) {
     console.error('Error inserting row:', error);
     res.status(500).json({ error: error.message });
@@ -107,7 +118,7 @@ router.post('/tables/:tableName/rows', authenticateToken, isAdmin, secretKey, (r
 });
 
 // Update row
-router.put('/tables/:tableName/rows/:id', authenticateToken, isAdmin, secretKey, (req, res) => {
+router.put('/tables/:tableName/rows/:id', authenticateToken, isAdmin, secretKey, async (req, res) => {
   try {
     const { tableName, id } = req.params;
     const { data } = req.body;
@@ -116,13 +127,13 @@ router.put('/tables/:tableName/rows/:id', authenticateToken, isAdmin, secretKey,
       return res.status(400).json({ error: 'Data object is required' });
     }
     
-    const setClause = Object.keys(data).map(key => `${key} = ?`).join(', ');
+    const setClause = Object.keys(data).map((key, i) => `${key} = $${i + 1}`).join(', ');
     const values = [...Object.values(data), id];
     
-    const stmt = db.prepare(`UPDATE ${tableName} SET ${setClause} WHERE id = ?`);
-    const result = stmt.run(...values);
+    const query = `UPDATE ${tableName} SET ${setClause} WHERE id = $${values.length}`;
+    const result = await sql.query(query, values);
     
-    res.json({ success: true, changes: result.changes });
+    res.json({ success: true, changes: result.rowCount });
   } catch (error) {
     console.error('Error updating row:', error);
     res.status(500).json({ error: error.message });
@@ -130,14 +141,14 @@ router.put('/tables/:tableName/rows/:id', authenticateToken, isAdmin, secretKey,
 });
 
 // Delete row
-router.delete('/tables/:tableName/rows/:id', authenticateToken, isAdmin, secretKey, (req, res) => {
+router.delete('/tables/:tableName/rows/:id', authenticateToken, isAdmin, secretKey, async (req, res) => {
   try {
     const { tableName, id } = req.params;
     
-    const stmt = db.prepare(`DELETE FROM ${tableName} WHERE id = ?`);
-    const result = stmt.run(id);
+    const query = `DELETE FROM ${tableName} WHERE id = $1`;
+    const result = await sql.query(query, [id]);
     
-    res.json({ success: true, changes: result.changes });
+    res.json({ success: true, changes: result.rowCount });
   } catch (error) {
     console.error('Error deleting row:', error);
     res.status(500).json({ error: error.message });
@@ -145,23 +156,21 @@ router.delete('/tables/:tableName/rows/:id', authenticateToken, isAdmin, secretK
 });
 
 // Execute raw SQL (dangerous - use with caution)
-router.post('/execute', authenticateToken, isAdmin, secretKey, (req, res) => {
+router.post('/execute', authenticateToken, isAdmin, secretKey, async (req, res) => {
   try {
-    const { sql, params = [] } = req.body;
+    const { sql: queryText, params = [] } = req.body;
     
-    if (!sql) {
+    if (!queryText) {
       return res.status(400).json({ error: 'SQL is required' });
     }
     
-    const trimmedSql = sql.trim().toUpperCase();
+    const result = await sql.query(queryText, params);
     
-    if (trimmedSql.startsWith('SELECT')) {
-      const result = db.prepare(sql).all(...params);
-      res.json({ success: true, result });
-    } else {
-      const result = db.prepare(sql).run(...params);
-      res.json({ success: true, changes: result.changes, lastInsertRowid: result.lastInsertRowid });
-    }
+    res.json({ 
+      success: true, 
+      result: result.rows,
+      changes: result.rowCount 
+    });
   } catch (error) {
     console.error('Error executing SQL:', error);
     res.status(500).json({ error: error.message });
@@ -169,24 +178,29 @@ router.post('/execute', authenticateToken, isAdmin, secretKey, (req, res) => {
 });
 
 // Clear all data from all tables (DANGEROUS!)
-router.post('/clear-all', authenticateToken, isAdmin, secretKey, (req, res) => {
+router.post('/clear-all', authenticateToken, isAdmin, secretKey, async (req, res) => {
   try {
     // Get all tables
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+    const tablesResult = await sql`
+      SELECT tablename as name 
+      FROM pg_catalog.pg_tables 
+      WHERE schemaname != 'pg_catalog' AND schemaname != 'information_schema'
+    `;
     
+    const tables = tablesResult.rows;
     let totalDeleted = 0;
     const results = [];
 
     // Delete all rows from each table
-    tables.forEach(table => {
+    for (const table of tables) {
       try {
-        const result = db.prepare(`DELETE FROM ${table.name}`).run();
-        results.push({ table: table.name, deleted: result.changes });
-        totalDeleted += result.changes;
+        const result = await sql.query(`DELETE FROM ${table.name}`);
+        results.push({ table: table.name, deleted: result.rowCount });
+        totalDeleted += result.rowCount;
       } catch (error) {
         results.push({ table: table.name, error: error.message });
       }
-    });
+    }
 
     res.json({ 
       success: true, 

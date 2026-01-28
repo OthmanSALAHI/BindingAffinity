@@ -1,47 +1,31 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+const { sql } = require('@vercel/postgres');
 const bcrypt = require('bcryptjs');
 
-const db = new Database(path.join(__dirname, '..', 'database.sqlite'), { verbose: console.log });
-
 // Create users table
-const createUsersTable = () => {
-  const sql = `
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password TEXT NOT NULL,
-      bio TEXT,
-      profile_image TEXT,
-      is_admin INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `;
-  db.exec(sql);
-  console.log('Users table created successfully');
-  
-  // Add bio column if it doesn't exist (for existing databases)
+const createUsersTable = async () => {
   try {
-    db.exec('ALTER TABLE users ADD COLUMN bio TEXT');
-    console.log('Bio column added to users table');
+    await sql`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(255) UNIQUE NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        bio TEXT,
+        profile_image VARCHAR(255),
+        is_admin BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    console.log('Users table created successfully');
   } catch (error) {
-    // Column already exists, ignore error
-  }
-  
-  // Add is_admin column if it doesn't exist (for existing databases)
-  try {
-    db.exec('ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0');
-    console.log('is_admin column added to users table');
-  } catch (error) {
-    // Column already exists, ignore error
+    console.error('Error creating users table:', error);
   }
 };
 
 // Initialize database
-const initDatabase = () => {
-  createUsersTable();
+const initDatabase = async () => {
+  await createUsersTable();
 };
 
-module.exports = { db, initDatabase };
+module.exports = { sql, initDatabase };

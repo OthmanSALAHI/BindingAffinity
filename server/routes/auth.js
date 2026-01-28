@@ -2,7 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
-const { db } = require('../config/database');
+const { sql } = require('../config/database');
 const { authenticateToken, adminMiddleware } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const fs = require('fs');
@@ -28,8 +28,8 @@ router.post(
       const { username, email, password } = req.body;
 
       // Check if user exists
-      const existingUser = db.prepare('SELECT * FROM users WHERE email = ? OR username = ?').get(email, username);
-      if (existingUser) {
+      const existingUser = await sql`SELECT * FROM users WHERE email = ${email} OR username = ${username}`;
+      if (existingUser.rows.length > 0) {
         return res.status(400).json({ error: 'User already exists' });
       }
 
@@ -37,12 +37,17 @@ router.post(
       const hashedPassword = await bcrypt.hash(password, 10);
 
       // Insert user
-      const stmt = db.prepare('INSERT INTO users (username, email, password) VALUES (?, ?, ?)');
-      const result = stmt.run(username, email, hashedPassword);
+      const result = await sql`
+        INSERT INTO users (username, email, password) 
+        VALUES (${username}, ${email}, ${hashedPassword})
+        RETURNING id, username, email, profile_image, is_admin
+      `;
+
+      const newUser = result.rows[0];
 
       // Generate token
       const token = jwt.sign(
-        { userId: result.lastInsertRowid, username, email, isAdmin: false },
+        { userId: newUser.id, username: newUser.username, email: newUser.email, isAdmin: newUser.is_admin },
         process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
@@ -50,7 +55,7 @@ router.post(
       res.status(201).json({
         message: 'User registered successfully',
         token,
-        user: { id: result.lastInsertRowid, username, email, profile_image: null, is_admin: false }
+        user: { ...newUser, is_admin: newUser.is_admin }
       });
     } catch (error) {
       console.error('Register error:', error);
@@ -76,7 +81,9 @@ router.post(
       const { email, password } = req.body;
 
       // Find user
-      const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+      const result = await sql`SELECT * FROM users WHERE email = ${email}`;
+      const user = result.rows[0];
+      
       if (!user) {
         return res.status(400).json({ error: 'Invalid credentials' });
       }
@@ -89,7 +96,7 @@ router.post(
 
       // Generate token
       const token = jwt.sign(
-        { userId: user.id, username: user.username, email: user.email, isAdmin: !!user.is_admin },
+        { userId: user.id, username: user.username, email: user.email, isAdmin: user.is_admin },
         process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
@@ -103,7 +110,7 @@ router.post(
           email: user.email,
           bio: user.bio,
           profile_image: user.profile_image,
-          is_admin: !!user.is_admin
+          is_admin: user.is_admin
         }
       });
     } catch (error) {
@@ -114,15 +121,21 @@ router.post(
 );
 
 // Get current user
-router.get('/me', authenticateToken, (req, res) => {
+router.get('/me', authenticateToken, async (req, res) => {
   try {
-    const user = db.prepare('SELECT id, username, email, bio, profile_image, is_admin, created_at FROM users WHERE id = ?').get(req.user.userId);
+    const result = await sql`
+      SELECT id, username, email, bio, profile_image, is_admin, created_at 
+      FROM users 
+      WHERE id = ${req.user.userId}
+    `;
+    
+    const user = result.rows[0];
     
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.json({ user: { ...user, is_admin: !!user.is_admin } });
+    res.json({ user });
   } catch (error) {
     console.error('Get user error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -150,48 +163,73 @@ router.put(
 
       // Check if username or email already exists (excluding current user)
       if (username) {
-        const existingUsername = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, userId);
-        if (existingUsername) {
+        const existingUsername = await sql`
+          SELECT id FROM users WHERE username = ${username} AND id != ${userId}
+        `;
+        if (existingUsername.rows.length > 0) {
           return res.status(400).json({ error: 'Username already taken' });
         }
       }
 
       if (email) {
-        const existingEmail = db.prepare('SELECT id FROM users WHERE email = ? AND id != ?').get(email, userId);
-        if (existingEmail) {
+        const existingEmail = await sql`
+          SELECT id FROM users WHERE email = ${email} AND id != ${userId}
+        `;
+        if (existingEmail.rows.length > 0) {
           return res.status(400).json({ error: 'Email already taken' });
         }
       }
 
-      // Build dynamic update query
+      // Build update query dynamically
       const updates = [];
-      const values = [];
-
-      if (username !== undefined) {
-        updates.push('username = ?');
-        values.push(username);
-      }
-      if (email !== undefined) {
-        updates.push('email = ?');
-        values.push(email);
-      }
-      if (bio !== undefined) {
-        updates.push('bio = ?');
-        values.push(bio);
-      }
+      if (username !== undefined) updates.push(`username = '${username}'`);
+      if (email !== undefined) updates.push(`email = '${email}'`);
+      if (bio !== undefined) updates.push(`bio = '${bio}'`);
 
       if (updates.length === 0) {
         return res.status(400).json({ error: 'No fields to update' });
       }
 
-      updates.push('updated_at = CURRENT_TIMESTAMP');
-      values.push(userId);
-
-      const sql = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`;
-      db.prepare(sql).run(...values);
+      // Perform update
+      if (username !== undefined && email !== undefined && bio !== undefined) {
+        await sql`
+          UPDATE users 
+          SET username = ${username}, email = ${email}, bio = ${bio}, updated_at = CURRENT_TIMESTAMP 
+          WHERE id = ${userId}
+        `;
+      } else if (username !== undefined && email !== undefined) {
+        await sql`
+          UPDATE users 
+          SET username = ${username}, email = ${email}, updated_at = CURRENT_TIMESTAMP 
+          WHERE id = ${userId}
+        `;
+      } else if (username !== undefined && bio !== undefined) {
+        await sql`
+          UPDATE users 
+          SET username = ${username}, bio = ${bio}, updated_at = CURRENT_TIMESTAMP 
+          WHERE id = ${userId}
+        `;
+      } else if (email !== undefined && bio !== undefined) {
+        await sql`
+          UPDATE users 
+          SET email = ${email}, bio = ${bio}, updated_at = CURRENT_TIMESTAMP 
+          WHERE id = ${userId}
+        `;
+      } else if (username !== undefined) {
+        await sql`UPDATE users SET username = ${username}, updated_at = CURRENT_TIMESTAMP WHERE id = ${userId}`;
+      } else if (email !== undefined) {
+        await sql`UPDATE users SET email = ${email}, updated_at = CURRENT_TIMESTAMP WHERE id = ${userId}`;
+      } else if (bio !== undefined) {
+        await sql`UPDATE users SET bio = ${bio}, updated_at = CURRENT_TIMESTAMP WHERE id = ${userId}`;
+      }
 
       // Get updated user
-      const updatedUser = db.prepare('SELECT id, username, email, bio, profile_image, created_at FROM users WHERE id = ?').get(userId);
+      const updatedUserResult = await sql`
+        SELECT id, username, email, bio, profile_image, created_at 
+        FROM users 
+        WHERE id = ${userId}
+      `;
+      const updatedUser = updatedUserResult.rows[0];
 
       res.json({
         message: 'Profile updated successfully',
@@ -205,16 +243,17 @@ router.put(
 );
 
 // Upload profile image
-router.post('/upload-profile-image', authenticateToken, upload.single('profile_image'), (req, res) => {
+router.post('/upload-profile-image', authenticateToken, upload.single('profile_image'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
     // Get current user to delete old image
-    const user = db.prepare('SELECT profile_image FROM users WHERE id = ?').get(req.user.userId);
+    const userResult = await sql`SELECT profile_image FROM users WHERE id = ${req.user.userId}`;
+    const user = userResult.rows[0];
     
-    if (user.profile_image) {
+    if (user && user.profile_image) {
       const oldImagePath = path.join(__dirname, '..', 'uploads', 'profiles', user.profile_image);
       if (fs.existsSync(oldImagePath)) {
         fs.unlinkSync(oldImagePath);
@@ -222,8 +261,11 @@ router.post('/upload-profile-image', authenticateToken, upload.single('profile_i
     }
 
     // Update user with new image filename
-    const stmt = db.prepare('UPDATE users SET profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-    stmt.run(req.file.filename, req.user.userId);
+    await sql`
+      UPDATE users 
+      SET profile_image = ${req.file.filename}, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ${req.user.userId}
+    `;
 
     res.json({
       message: 'Profile image uploaded successfully',
@@ -236,11 +278,12 @@ router.post('/upload-profile-image', authenticateToken, upload.single('profile_i
 });
 
 // Delete profile image
-router.delete('/delete-profile-image', authenticateToken, (req, res) => {
+router.delete('/delete-profile-image', authenticateToken, async (req, res) => {
   try {
-    const user = db.prepare('SELECT profile_image FROM users WHERE id = ?').get(req.user.userId);
+    const userResult = await sql`SELECT profile_image FROM users WHERE id = ${req.user.userId}`;
+    const user = userResult.rows[0];
     
-    if (!user.profile_image) {
+    if (!user || !user.profile_image) {
       return res.status(400).json({ error: 'No profile image to delete' });
     }
 
@@ -251,8 +294,11 @@ router.delete('/delete-profile-image', authenticateToken, (req, res) => {
     }
 
     // Update database
-    const stmt = db.prepare('UPDATE users SET profile_image = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-    stmt.run(req.user.userId);
+    await sql`
+      UPDATE users 
+      SET profile_image = NULL, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ${req.user.userId}
+    `;
 
     res.json({ message: 'Profile image deleted successfully' });
   } catch (error) {
@@ -264,13 +310,15 @@ router.delete('/delete-profile-image', authenticateToken, (req, res) => {
 // ========== ADMIN ROUTES ==========
 
 // Get all users (admin only)
-router.get('/admin/users', authenticateToken, adminMiddleware, (req, res) => {
+router.get('/admin/users', authenticateToken, adminMiddleware, async (req, res) => {
   try {
-    const users = db.prepare('SELECT id, username, email, bio, profile_image, is_admin, created_at FROM users ORDER BY created_at DESC').all();
+    const result = await sql`
+      SELECT id, username, email, bio, profile_image, is_admin, created_at 
+      FROM users 
+      ORDER BY created_at DESC
+    `;
     
-    res.json({ 
-      users: users.map(user => ({ ...user, is_admin: !!user.is_admin }))
-    });
+    res.json({ users: result.rows });
   } catch (error) {
     console.error('Get users error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -298,8 +346,10 @@ router.post(
       const { username, email, password, is_admin = false } = req.body;
 
       // Check if user exists
-      const existingUser = db.prepare('SELECT * FROM users WHERE email = ? OR username = ?').get(email, username);
-      if (existingUser) {
+      const existingUser = await sql`
+        SELECT * FROM users WHERE email = ${email} OR username = ${username}
+      `;
+      if (existingUser.rows.length > 0) {
         return res.status(400).json({ error: 'User already exists' });
       }
 
@@ -307,14 +357,17 @@ router.post(
       const hashedPassword = await bcrypt.hash(password, 10);
 
       // Insert user
-      const stmt = db.prepare('INSERT INTO users (username, email, password, is_admin) VALUES (?, ?, ?, ?)');
-      const result = stmt.run(username, email, hashedPassword, is_admin ? 1 : 0);
+      const result = await sql`
+        INSERT INTO users (username, email, password, is_admin) 
+        VALUES (${username}, ${email}, ${hashedPassword}, ${is_admin})
+        RETURNING id, username, email, bio, profile_image, is_admin, created_at
+      `;
 
-      const newUser = db.prepare('SELECT id, username, email, bio, profile_image, is_admin, created_at FROM users WHERE id = ?').get(result.lastInsertRowid);
+      const newUser = result.rows[0];
 
       res.status(201).json({
         message: 'User created successfully',
-        user: { ...newUser, is_admin: !!newUser.is_admin }
+        user: newUser
       });
     } catch (error) {
       console.error('Create user error:', error);
@@ -324,7 +377,7 @@ router.post(
 );
 
 // Delete user (admin only)
-router.delete('/admin/users/:id', authenticateToken, adminMiddleware, (req, res) => {
+router.delete('/admin/users/:id', authenticateToken, adminMiddleware, async (req, res) => {
   try {
     const userId = parseInt(req.params.id);
 
@@ -334,7 +387,8 @@ router.delete('/admin/users/:id', authenticateToken, adminMiddleware, (req, res)
     }
 
     // Get user to delete profile image if exists
-    const user = db.prepare('SELECT profile_image FROM users WHERE id = ?').get(userId);
+    const userResult = await sql`SELECT profile_image FROM users WHERE id = ${userId}`;
+    const user = userResult.rows[0];
     
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -349,10 +403,9 @@ router.delete('/admin/users/:id', authenticateToken, adminMiddleware, (req, res)
     }
 
     // Delete user from database
-    const stmt = db.prepare('DELETE FROM users WHERE id = ?');
-    const result = stmt.run(userId);
+    const result = await sql`DELETE FROM users WHERE id = ${userId}`;
 
-    if (result.changes === 0) {
+    if (result.rowCount === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
@@ -364,7 +417,7 @@ router.delete('/admin/users/:id', authenticateToken, adminMiddleware, (req, res)
 });
 
 // Update user admin status (admin only)
-router.patch('/admin/users/:id/admin-status', authenticateToken, adminMiddleware, (req, res) => {
+router.patch('/admin/users/:id/admin-status', authenticateToken, adminMiddleware, async (req, res) => {
   try {
     const userId = parseInt(req.params.id);
     const { is_admin } = req.body;
@@ -374,18 +427,22 @@ router.patch('/admin/users/:id/admin-status', authenticateToken, adminMiddleware
       return res.status(400).json({ error: 'Cannot modify your own admin status' });
     }
 
-    const stmt = db.prepare('UPDATE users SET is_admin = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-    const result = stmt.run(is_admin ? 1 : 0, userId);
+    const result = await sql`
+      UPDATE users 
+      SET is_admin = ${is_admin}, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ${userId}
+      RETURNING id, username, email, bio, profile_image, is_admin, created_at
+    `;
 
-    if (result.changes === 0) {
+    if (result.rowCount === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const updatedUser = db.prepare('SELECT id, username, email, bio, profile_image, is_admin, created_at FROM users WHERE id = ?').get(userId);
+    const updatedUser = result.rows[0];
 
     res.json({
       message: 'User admin status updated successfully',
-      user: { ...updatedUser, is_admin: !!updatedUser.is_admin }
+      user: updatedUser
     });
   } catch (error) {
     console.error('Update admin status error:', error);
