@@ -1,8 +1,8 @@
 const { Pool } = require('pg');
 
-// Create a connection pool using the POSTGRES_URL from environment
+// Create a connection pool using the backend_POSTGRES_URL from environment
 const pool = new Pool({
-  connectionString: process.env.POSTGRES_URL,
+  connectionString: process.env.backend_POSTGRES_URL,
   ssl: process.env.NODE_ENV === 'production' ? {
     rejectUnauthorized: false
   } : false,
@@ -14,9 +14,9 @@ const pool = new Pool({
 
 // Helper function to execute queries
 const sql = async (strings, ...values) => {
-  // Check if POSTGRES_URL is configured
-  if (!process.env.POSTGRES_URL) {
-    throw new Error('POSTGRES_URL environment variable is not configured');
+  // Check if backend_POSTGRES_URL is configured
+  if (!process.env.backend_POSTGRES_URL) {
+    throw new Error('backend_POSTGRES_URL environment variable is not configured');
   }
   
   const client = await pool.connect();
@@ -42,8 +42,8 @@ const sql = async (strings, ...values) => {
 
 // Add query method for raw queries
 sql.query = async (text, params) => {
-  if (!process.env.POSTGRES_URL) {
-    throw new Error('POSTGRES_URL environment variable is not configured');
+  if (!process.env.backend_POSTGRES_URL) {
+    throw new Error('backend_POSTGRES_URL environment variable is not configured');
   }
   
   const client = await pool.connect();
@@ -80,8 +80,8 @@ const createUsersTable = async () => {
 
 // Initialize database
 const initDatabase = async () => {
-  if (!process.env.POSTGRES_URL) {
-    console.warn('POSTGRES_URL not configured - skipping database initialization');
+  if (!process.env.backend_POSTGRES_URL) {
+    console.warn('backend_POSTGRES_URL not configured - skipping database initialization');
     return;
   }
   await createUsersTable();
