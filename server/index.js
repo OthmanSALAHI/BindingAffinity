@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { initDatabase } = require('./config/database');
 const authRoutes = require('./routes/auth');
 const databaseRoutes = require('./routes/database');
 const fetch = require('node-fetch');
@@ -18,38 +17,30 @@ app.use(express.urlencoded({ extended: true }));
 // Static file serving
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Initialize database once (for serverless, this runs on cold start)
-let dbInitialized = false;
-const ensureDatabase = async (req, res, next) => {
-  if (!dbInitialized) {
-    try {
-      await initDatabase();
-      dbInitialized = true;
-      console.log('Database initialized successfully');
-    } catch (error) {
-      console.error('Failed to initialize database:', error);
-      return res.status(500).json({ error: 'Database initialization failed' });
-    }
-  }
-  next();
-};
-
-// Apply database middleware to all routes except health check
-app.use((req, res, next) => {
-  if (req.path === '/api/health') {
-    return next();
-  }
-  return ensureDatabase(req, res, next);
+// Health check - no database required
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    message: 'Server is running',
+    timestamp: new Date().toISOString(),
+    env: process.env.NODE_ENV || 'development'
+  });
 });
 
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/database', databaseRoutes);
 
-// --- NEW PREDICTION ENDPOINT ---
+// --- PREDICTION ENDPOINT ---
 app.post('/api/predict', async (req, res) => {
   try {
     const { smiles, protein_sequence } = req.body;
+    
+    if (!smiles || !protein_sequence) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: smiles and protein_sequence' 
+      });
+    }
     
     // The URL of your Hugging Face Space (Python Model)
     const HF_API_URL = 'https://abdoir-drug-target-binding-affinity.hf.space/predict';
@@ -76,21 +67,27 @@ app.post('/api/predict', async (req, res) => {
   }
 });
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'Server is running' });
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({ 
+    error: 'Internal server error',
+    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+  });
 });
 
 // For local development only
-if (process.env.NODE_ENV !== 'production') {
+if (process.env.NODE_ENV !== 'production' && require.main === module) {
+  const { initDatabase } = require('./config/database');
+  
   const startServer = async () => {
     try {
       await initDatabase();
-      dbInitialized = true;
       console.log('Database initialized successfully');
       
       app.listen(PORT, () => {
         console.log(`Server is running on port ${PORT}`);
+        console.log(`Health check: http://localhost:${PORT}/api/health`);
       });
     } catch (error) {
       console.error('Failed to initialize database:', error);
