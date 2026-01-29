@@ -1,7 +1,8 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://binding-affinity-backend.vercel.app/api';
-const BINDING_AFFINITY_API = 'https://abdoir-drug-target-binding-affinity.hf.space';
+const API_BASE_URL = import.meta.env.VITE_API_URL ;
+const BINDING_AFFINITY_API = import.meta.env.VITE_BINDING_AFFINITY_API ;
 
 // API Client
+
 class ApiClient {
   private baseURL: string;
 
@@ -31,6 +32,8 @@ class ApiClient {
     };
 
     try {
+      console.log('API_BASE_URL:', API_BASE_URL);
+      console.log('BINDING_AFFINITY_API:', BINDING_AFFINITY_API);
       const response = await fetch(url, config);
       const data = await response.json();
 
